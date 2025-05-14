@@ -6,7 +6,11 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "prisma:migrate": "docker compose exec -it web sh -c 'npx prisma migrate dev'",
+    "prisma:generate": "docker compose exec -it web sh -c 'npx prisma generate'",
+    "prisma:seed": "docker compose exec -it web sh -c 'node prisma/seed.mjs'",
+    "prisma:reset": "docker compose exec -it web sh -c 'npx prisma migrate reset'"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -17,6 +21,7 @@
     "@mui/icons-material": "^7.1.0",
     "@mui/material": "^7.1.0",
     "@mui/material-nextjs": "^7.1.0",
+    "@prisma/client": "^6.7.0",
     "next": "15.3.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -28,6 +33,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
+    "prisma": "^6.7.0",
     "typescript": "^5"
   }
 }
