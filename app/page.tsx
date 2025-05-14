@@ -8,26 +8,155 @@ import {
   Divider,
 } from "@mui/material";
 import React from "react";
-import { useEffect, useState } from "react";
-
-interface Parking {
-  id: string;
-  vehicleId: string;
-  floor: string;
-  updatedAt: string;
-}
-
-interface Vehicle {
-  id: string;
-  nickname: string;
-  parkings: Parking[];
-}
+import { useEffect, useState, useCallback } from "react";
+import { Vehicle } from "./types";
+import {
+  addPendingParking,
+  getAllPendingParkings,
+  deletePendingParking,
+  getCachedVehicles,
+  cacheVehicles,
+} from "./lib/idb";
+import { useOnlineStatus } from "./hooks/useOnlineStatus";
 
 export default function Home() {
   const [vehicles, setVehicles] = useState<Vehicle[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const isOnline = useOnlineStatus();
+  const [isClient, setIsClient] = useState(false);
+  
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  const syncPendingParkings = async () => {
+    const pending = await getAllPendingParkings();
+    if (pending.length === 0) return;
+
+    try {
+      const response = await fetch("/api/parkings/batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pending),
+      });
+
+      if (response.ok) {
+        await Promise.all(pending.map((p) => deletePendingParking(p.id)));
+
+        const currentData = await getCachedVehicles();
+        const updatedCache = currentData.map((v) => ({
+          ...v,
+          parkings: v.parkings.filter((p) => !p.id.startsWith("pending-")),
+        }));
+        await cacheVehicles(updatedCache);
+      }
+    } catch (error) {
+      console.error("Sync error:", error);
+    }
+
+    const updatedData = await fetch("/api/vehicles").then((res) => res.json());
+    await cacheVehicles(updatedData);
+    setVehicles(updatedData);
+  };
+
+  useEffect(() => {
+    if (isOnline) {
+      syncPendingParkings();
+    }
+  }, [isOnline]);
+
+  const loadData = useCallback(async () => {
+    if (!isClient) return;
+      try {
+        let data: Vehicle[];
+
+        if (isOnline) {
+          const response = await fetch("/api/vehicles");
+          data = await response.json();
+          await cacheVehicles(data);
+        } else {
+          data = await getCachedVehicles();
+        }
+
+        const pendingParkings = await getAllPendingParkings();
+        const mergedData = data.map((vehicle) => ({
+          ...vehicle,
+          parkings: [
+            ...pendingParkings
+              .filter((p) => p.vehicleId === vehicle.id)
+              .map((p) => ({
+                id: `pending-${p.id}`,
+                vehicleId: p.vehicleId,
+                floor: p.floor,
+                updatedAt: p.updatedAt,
+              })),
+            ...vehicle.parkings,
+          ].sort(
+            (a, b) =>
+              new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+          ),
+        }));
+
+        setVehicles(mergedData);
+        setLoading(false);
+      } catch (error) {
+        console.error("Data loading error:", error);
+        setLoading(false);
+      }
+  }, [isOnline, isClient]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleParkingCreate = async (vehicleId: string, floor: string) => {
+    const newParking = {
+      vehicleId,
+      floor,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (!isOnline) {
+      await addPendingParking(newParking);
+
+      setVehicles(
+        (prev) =>
+          prev?.map((v) =>
+            v.id === vehicleId
+              ? {
+                  ...v,
+                  parkings: [
+                    {
+                      id: `pending-${Date.now()}`,
+                      ...newParking,
+                    },
+                    ...v.parkings,
+                  ],
+                }
+              : v,
+          ) || null,
+      );
+
+      const currentData = await getCachedVehicles();
+      const updatedCache = currentData.map((v) =>
+        v.id === vehicleId
+          ? {
+              ...v,
+              parkings: [
+                {
+                  id: `pending-${Date.now()}`,
+                  ...newParking,
+                },
+                ...v.parkings,
+              ],
+            }
+          : v,
+      );
+      await cacheVehicles(updatedCache);
+
+      return;
+    }
+
     try {
       const response = await fetch("/api/parkings", {
         method: "POST",
@@ -41,24 +170,23 @@ export default function Home() {
         throw new Error("Failed to create parking");
       }
 
-      // Refresh vehicle data
       const updatedData = await fetch("/api/vehicles").then((res) =>
         res.json(),
       );
+      await cacheVehicles(updatedData);
       setVehicles(updatedData);
     } catch (error) {
       console.error("Parking creation error:", error);
     }
   };
 
-  useEffect(() => {
-    fetch("/api/vehicles")
-      .then((res) => res.json())
-      .then((data) => {
-        if (!data.error) setVehicles(data);
-        setLoading(false);
-      });
-  }, []);
+  if (!isClient) {
+    return (
+      <Container sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
+        <CircularProgress />
+      </Container>
+    );
+  }
 
   return (
     <Container
@@ -70,6 +198,11 @@ export default function Home() {
       }}
     >
       <Typography sx={{ my: 4 }}>Park noted</Typography>
+      {!isOnline && (
+        <Typography color="error" sx={{ mb: 2 }}>
+          Offline mode - changes will be synced when online
+        </Typography>
+      )}
 
       {loading ? (
         <CircularProgress />
